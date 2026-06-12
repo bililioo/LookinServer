@@ -20,6 +20,7 @@
 #import <objc/runtime.h>
 #import "LookinObject.h"
 #import "LookinAppInfo.h"
+#import "Lookin_PTChannel.h"
 #import "LKS_AttrGroupsMaker.h"
 #import "LKS_InbuiltAttrModificationHandler.h"
 #import "LKS_CustomAttrModificationHandler.h"
@@ -29,7 +30,7 @@
 
 @interface LKS_RequestHandler ()
 
-@property(nonatomic, strong) NSMutableSet<LKS_HierarchyDetailsHandler *> *activeDetailHandlers;
+@property(nonatomic, strong) NSMutableDictionary<NSNumber *, NSMutableSet<LKS_HierarchyDetailsHandler *> *> *activeDetailHandlersByChannel;
 
 @end
 
@@ -55,7 +56,7 @@
                               @(LookinPush_CanceHierarchyDetails),
                               nil];
         
-        self.activeDetailHandlers = [NSMutableSet set];
+        self.activeDetailHandlersByChannel = [NSMutableDictionary dictionary];
     }
     return self;
 }
@@ -67,19 +68,19 @@
     return NO;
 }
 
-- (void)handleRequestType:(uint32_t)requestType tag:(uint32_t)tag object:(id)object {
+- (void)handleRequestType:(uint32_t)requestType tag:(uint32_t)tag object:(id)object channel:(Lookin_PTChannel *)channel {
     if (requestType == LookinRequestTypePing) {
         LookinConnectionResponseAttachment *responseAttachment = [LookinConnectionResponseAttachment new];
         // 当 app 处于后台时，可能可以执行代码也可能不能执行代码，如果运气好了可以执行代码，则这里直接主动使用 appIsInBackground 标识 app 处于后台，不要让 Lookin 客户端傻傻地等待超时了
         if (![LKS_ConnectionManager sharedInstance].applicationIsActive) {
             responseAttachment.appIsInBackground = YES;            
         }
-        [[LKS_ConnectionManager sharedInstance] respond:responseAttachment requestType:requestType tag:tag];
+        [[LKS_ConnectionManager sharedInstance] respond:responseAttachment requestType:requestType tag:tag channel:channel];
         
     } else if (requestType == LookinRequestTypeApp) {
         // 请求可用设备信息
         if (![object isKindOfClass:[NSDictionary class]]) {
-            [self _submitResponseWithError:LookinErr_Inner requestType:requestType tag:tag];
+            [self _submitResponseWithError:LookinErr_Inner requestType:requestType tag:tag channel:channel];
             return;
         }
         NSDictionary<NSString *, id> *params = object;
@@ -90,7 +91,7 @@
         
         LookinConnectionResponseAttachment *responseAttachment = [LookinConnectionResponseAttachment new];
         responseAttachment.data = appInfo;
-        [[LKS_ConnectionManager sharedInstance] respond:responseAttachment requestType:requestType tag:tag];
+        [[LKS_ConnectionManager sharedInstance] respond:responseAttachment requestType:requestType tag:tag channel:channel];
         
     } else if (requestType == LookinRequestTypeHierarchy) {
         // 从 LookinClient 1.0.4 开始有这个参数，之前是 nil
@@ -105,7 +106,7 @@
         
         LookinConnectionResponseAttachment *responseAttachment = [LookinConnectionResponseAttachment new];
         responseAttachment.data = [LookinHierarchyInfo staticInfoWithLookinVersion:clientVersion];
-        [[LKS_ConnectionManager sharedInstance] respond:responseAttachment requestType:requestType tag:tag];
+        [[LKS_ConnectionManager sharedInstance] respond:responseAttachment requestType:requestType tag:tag channel:channel];
         
     } else if (requestType == LookinRequestTypeInbuiltAttrModification) {
         // 请求修改某个属性
@@ -116,15 +117,15 @@
             } else {
                 attachment.data = data;
             }
-            [[LKS_ConnectionManager sharedInstance] respond:attachment requestType:requestType tag:tag];
+            [[LKS_ConnectionManager sharedInstance] respond:attachment requestType:requestType tag:tag channel:channel];
         }];
         
     } else if (requestType == LookinRequestTypeCustomAttrModification) {
         BOOL succ = [LKS_CustomAttrModificationHandler handleModification:object];
         if (succ) {
-            [self _submitResponseWithData:nil requestType:requestType tag:tag];
+            [self _submitResponseWithData:nil requestType:requestType tag:tag channel:channel];
         } else {
-            [self _submitResponseWithError:LookinErr_Inner requestType:requestType tag:tag];
+            [self _submitResponseWithError:LookinErr_Inner requestType:requestType tag:tag channel:channel];
         }
         
     } else if (requestType == LookinRequestTypeAttrModificationPatch) {
@@ -135,7 +136,7 @@
             attrAttachment.data = data;
             attrAttachment.dataTotalCount = dataTotalCount;
             attrAttachment.currentDataCount = 1;
-            [[LKS_ConnectionManager sharedInstance] respond:attrAttachment requestType:LookinRequestTypeAttrModificationPatch tag:tag];
+            [[LKS_ConnectionManager sharedInstance] respond:attrAttachment requestType:LookinRequestTypeAttrModificationPatch tag:tag channel:channel];
         }];
         
     } else if (requestType == LookinRequestTypeHierarchyDetails) {
@@ -146,17 +147,22 @@
         } initialAccumlator:0];
         
         LKS_HierarchyDetailsHandler *handler = [LKS_HierarchyDetailsHandler new];
-        [self.activeDetailHandlers addObject:handler];
+        NSMutableSet<LKS_HierarchyDetailsHandler *> *handlers = [self _activeDetailHandlersForChannel:channel createIfNeeded:YES];
+        [handlers addObject:handler];
         
         [handler startWithPackages:packages block:^(NSArray<LookinDisplayItemDetail *> *details) {
             LookinConnectionResponseAttachment *attachment = [LookinConnectionResponseAttachment new];
             attachment.data = details;
             attachment.dataTotalCount = responsesDataTotalCount;
             attachment.currentDataCount = details.count;
-            [[LKS_ConnectionManager sharedInstance] respond:attachment requestType:LookinRequestTypeHierarchyDetails tag:tag];
+            [[LKS_ConnectionManager sharedInstance] respond:attachment requestType:LookinRequestTypeHierarchyDetails tag:tag channel:channel];
             
         } finishedBlock:^{
-            [self.activeDetailHandlers removeObject:handler];
+            NSMutableSet<LKS_HierarchyDetailsHandler *> *currentHandlers = [self _activeDetailHandlersForChannel:channel createIfNeeded:NO];
+            [currentHandlers removeObject:handler];
+            if (!currentHandlers.count) {
+                [self.activeDetailHandlersByChannel removeObjectForKey:@(channel.uniqueID)];
+            }
         }];
         
     } else if (requestType == LookinRequestTypeFetchObject) {
@@ -166,22 +172,22 @@
         
         LookinConnectionResponseAttachment *attach = [LookinConnectionResponseAttachment new];
         attach.data = lookinObj;
-        [[LKS_ConnectionManager sharedInstance] respond:attach requestType:requestType tag:tag];
+        [[LKS_ConnectionManager sharedInstance] respond:attach requestType:requestType tag:tag channel:channel];
         
     } else if (requestType == LookinRequestTypeAllAttrGroups) {
         unsigned long oid = ((NSNumber *)object).unsignedLongValue;
         CALayer *layer = (CALayer *)[NSObject lks_objectWithOid:oid];
         if (![layer isKindOfClass:[CALayer class]]) {
-            [self _submitResponseWithError:LookinErr_ObjNotFound requestType:LookinRequestTypeAllAttrGroups tag:tag];
+            [self _submitResponseWithError:LookinErr_ObjNotFound requestType:LookinRequestTypeAllAttrGroups tag:tag channel:channel];
             return;
         }
         
         NSArray<LookinAttributesGroup *> *list = [LKS_AttrGroupsMaker attrGroupsForLayer:layer];
-        [self _submitResponseWithData:list requestType:LookinRequestTypeAllAttrGroups tag:tag];
+        [self _submitResponseWithData:list requestType:LookinRequestTypeAllAttrGroups tag:tag channel:channel];
         
     } else if (requestType == LookinRequestTypeAllSelectorNames) {
         if (![object isKindOfClass:[NSDictionary class]]) {
-            [self _submitResponseWithError:LookinErr_Inner requestType:requestType tag:tag];
+            [self _submitResponseWithError:LookinErr_Inner requestType:requestType tag:tag channel:channel];
             return;
         }
         NSDictionary *params = object;
@@ -189,28 +195,28 @@
         BOOL hasArg = [(NSNumber *)params[@"hasArg"] boolValue];
         if (!targetClass) {
             NSString *errorMsg = [NSString stringWithFormat:LKS_Localized(@"Didn't find the class named \"%@\". Please input another class and try again."), object];
-            [self _submitResponseWithError:LookinErrorMake(errorMsg, @"") requestType:requestType tag:tag];
+            [self _submitResponseWithError:LookinErrorMake(errorMsg, @"") requestType:requestType tag:tag channel:channel];
             return;
         }
         
         NSArray<NSString *> *selNames = [self _methodNameListForClass:targetClass hasArg:hasArg];
-        [self _submitResponseWithData:selNames requestType:requestType tag:tag];
+        [self _submitResponseWithData:selNames requestType:requestType tag:tag channel:channel];
         
     } else if (requestType == LookinRequestTypeInvokeMethod) {
         if (![object isKindOfClass:[NSDictionary class]]) {
-            [self _submitResponseWithError:LookinErr_Inner requestType:requestType tag:tag];
+            [self _submitResponseWithError:LookinErr_Inner requestType:requestType tag:tag channel:channel];
             return;
         }
         NSDictionary *param = object;
         unsigned long oid = [param[@"oid"] unsignedLongValue];
         NSString *text = param[@"text"];
         if (!text.length) {
-            [self _submitResponseWithError:LookinErr_Inner requestType:requestType tag:tag];
+            [self _submitResponseWithError:LookinErr_Inner requestType:requestType tag:tag channel:channel];
             return;
         }
         NSObject *targerObj = [NSObject lks_objectWithOid:oid];
         if (!targerObj) {
-            [self _submitResponseWithError:LookinErr_ObjNotFound requestType:requestType tag:tag];
+            [self _submitResponseWithError:LookinErr_ObjNotFound requestType:requestType tag:tag channel:channel];
             return;
         }
         
@@ -221,7 +227,7 @@
             NSError *error;
             [self _handleInvokeWithObject:targerObj selector:targetSelector resultDescription:&resultDescription resultObject:&resultObject error:&error];
             if (error) {
-                [self _submitResponseWithError:error requestType:requestType tag:tag];
+                [self _submitResponseWithError:error requestType:requestType tag:tag channel:channel];
                 return;
             }
             NSMutableDictionary *responseData = [NSMutableDictionary dictionaryWithCapacity:2];
@@ -231,40 +237,41 @@
             if (resultObject) {
                 responseData[@"object"] = resultObject;
             }
-            [self _submitResponseWithData:responseData requestType:requestType tag:tag];
+            [self _submitResponseWithData:responseData requestType:requestType tag:tag channel:channel];
         } else {
             NSString *errMsg = [NSString stringWithFormat:LKS_Localized(@"%@ doesn't have an instance method called \"%@\"."), NSStringFromClass(targerObj.class), text];
-            [self _submitResponseWithError:LookinErrorMake(errMsg, @"") requestType:requestType tag:tag];
+            [self _submitResponseWithError:LookinErrorMake(errMsg, @"") requestType:requestType tag:tag channel:channel];
         }
         
     } else if (requestType == LookinPush_CanceHierarchyDetails) {
-        [self.activeDetailHandlers enumerateObjectsUsingBlock:^(LKS_HierarchyDetailsHandler * _Nonnull handler, BOOL * _Nonnull stop) {
+        NSMutableSet<LKS_HierarchyDetailsHandler *> *handlers = [self _activeDetailHandlersForChannel:channel createIfNeeded:NO];
+        [handlers enumerateObjectsUsingBlock:^(LKS_HierarchyDetailsHandler * _Nonnull handler, BOOL * _Nonnull stop) {
             [handler cancel];
         }];
-        [self.activeDetailHandlers removeAllObjects];
+        [self.activeDetailHandlersByChannel removeObjectForKey:@(channel.uniqueID)];
         
     } else if (requestType == LookinRequestTypeFetchImageViewImage) {
         if (![object isKindOfClass:[NSNumber class]]) {
-            [self _submitResponseWithError:LookinErr_Inner requestType:requestType tag:tag];
+            [self _submitResponseWithError:LookinErr_Inner requestType:requestType tag:tag channel:channel];
             return;
         }
         unsigned long imageViewOid = [(NSNumber *)object unsignedLongValue];
         UIImageView *imageView = (UIImageView *)[NSObject lks_objectWithOid:imageViewOid];
         if (!imageView) {
-            [self _submitResponseWithError:LookinErr_ObjNotFound requestType:requestType tag:tag];
+            [self _submitResponseWithError:LookinErr_ObjNotFound requestType:requestType tag:tag channel:channel];
             return;
         }
         if (![imageView isKindOfClass:[UIImageView class]]) {
-            [self _submitResponseWithError:LookinErr_Inner requestType:requestType tag:tag];
+            [self _submitResponseWithError:LookinErr_Inner requestType:requestType tag:tag channel:channel];
             return;
         }
         UIImage *image = imageView.image;
         NSData *imageData = [image lookin_data];
-        [self _submitResponseWithData:imageData requestType:requestType tag:tag];
+        [self _submitResponseWithData:imageData requestType:requestType tag:tag channel:channel];
     
     } else if (requestType == LookinRequestTypeModifyRecognizerEnable) {
         if (![object isKindOfClass:[NSDictionary class]]) {
-            [self _submitResponseWithError:LookinErr_Inner requestType:requestType tag:tag];
+            [self _submitResponseWithError:LookinErr_Inner requestType:requestType tag:tag channel:channel];
             return;
         }
         NSDictionary<NSString *, NSNumber *> *params = object;
@@ -273,19 +280,40 @@
         
         UIGestureRecognizer *recognizer = (UIGestureRecognizer *)[NSObject lks_objectWithOid:recognizerOid];
         if (!recognizer) {
-            [self _submitResponseWithError:LookinErr_ObjNotFound requestType:requestType tag:tag];
+            [self _submitResponseWithError:LookinErr_ObjNotFound requestType:requestType tag:tag channel:channel];
             return;
         }
         if (![recognizer isKindOfClass:[UIGestureRecognizer class]]) {
-            [self _submitResponseWithError:LookinErr_Inner requestType:requestType tag:tag];
+            [self _submitResponseWithError:LookinErr_Inner requestType:requestType tag:tag channel:channel];
             return;
         }
         recognizer.enabled = shouldBeEnabled;
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
             // dispatch 以确保拿到的 enabled 是比较新的
-            [self _submitResponseWithData:@(recognizer.enabled) requestType:requestType tag:tag];
+            [self _submitResponseWithData:@(recognizer.enabled) requestType:requestType tag:tag channel:channel];
         });
     }
+}
+
+- (void)cancelRequestsForChannel:(Lookin_PTChannel *)channel {
+    NSMutableSet<LKS_HierarchyDetailsHandler *> *handlers = [self _activeDetailHandlersForChannel:channel createIfNeeded:NO];
+    [handlers enumerateObjectsUsingBlock:^(LKS_HierarchyDetailsHandler * _Nonnull obj, BOOL * _Nonnull stop) {
+        [obj cancel];
+    }];
+    [self.activeDetailHandlersByChannel removeObjectForKey:@(channel.uniqueID)];
+}
+
+- (NSMutableSet<LKS_HierarchyDetailsHandler *> *)_activeDetailHandlersForChannel:(Lookin_PTChannel *)channel createIfNeeded:(BOOL)createIfNeeded {
+    if (!channel) {
+        return nil;
+    }
+    NSNumber *key = @(channel.uniqueID);
+    NSMutableSet<LKS_HierarchyDetailsHandler *> *handlers = self.activeDetailHandlersByChannel[key];
+    if (!handlers && createIfNeeded) {
+        handlers = [NSMutableSet set];
+        self.activeDetailHandlersByChannel[key] = handlers;
+    }
+    return handlers;
 }
 
 - (NSArray<NSString *> *)_methodNameListForClass:(Class)aClass hasArg:(BOOL)hasArg {
@@ -541,16 +569,16 @@
     }
 }
 
-- (void)_submitResponseWithError:(NSError *)error requestType:(uint32_t)requestType tag:(uint32_t)tag {
+- (void)_submitResponseWithError:(NSError *)error requestType:(uint32_t)requestType tag:(uint32_t)tag channel:(Lookin_PTChannel *)channel {
     LookinConnectionResponseAttachment *attachment = [LookinConnectionResponseAttachment new];
     attachment.error = error;
-    [[LKS_ConnectionManager sharedInstance] respond:attachment requestType:requestType tag:tag];
+    [[LKS_ConnectionManager sharedInstance] respond:attachment requestType:requestType tag:tag channel:channel];
 }
 
-- (void)_submitResponseWithData:(NSObject *)data requestType:(uint32_t)requestType tag:(uint32_t)tag {
+- (void)_submitResponseWithData:(NSObject *)data requestType:(uint32_t)requestType tag:(uint32_t)tag channel:(Lookin_PTChannel *)channel {
     LookinConnectionResponseAttachment *attachment = [LookinConnectionResponseAttachment new];
     attachment.data = data;
-    [[LKS_ConnectionManager sharedInstance] respond:attachment requestType:requestType tag:tag];
+    [[LKS_ConnectionManager sharedInstance] respond:attachment requestType:requestType tag:tag channel:channel];
 }
 
 @end

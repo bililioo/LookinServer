@@ -32,8 +32,6 @@
 
 - (instancetype)init {
     if (self = [super init]) {
-        [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(_handleConnectionDidEnd:) name:LKS_ConnectionDidEndNotificationName object:nil];
-        
         self.attrGroupsSyncedOids = [NSMutableSet set];
     }
     return self;
@@ -137,10 +135,6 @@
     }
     NSAssert(NO, @"");
     return YES;
-}
-
-- (void)_handleConnectionDidEnd:(id)obj {
-    [self cancel];
 }
 
 @end

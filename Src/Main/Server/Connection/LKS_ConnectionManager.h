@@ -12,7 +12,7 @@
 
 extern NSString *const LKS_ConnectionDidEndNotificationName;
 
-@class LookinConnectionResponseAttachment;
+@class LookinConnectionResponseAttachment, Lookin_PTChannel;
 
 @interface LKS_ConnectionManager : NSObject
 
@@ -20,7 +20,7 @@ extern NSString *const LKS_ConnectionDidEndNotificationName;
 
 @property(nonatomic, assign) BOOL applicationIsActive;
 
-- (void)respond:(LookinConnectionResponseAttachment *)data requestType:(uint32_t)requestType tag:(uint32_t)tag;
+- (void)respond:(LookinConnectionResponseAttachment *)data requestType:(uint32_t)requestType tag:(uint32_t)tag channel:(Lookin_PTChannel *)channel;
 
 - (void)pushData:(NSObject *)data type:(uint32_t)type;
 
