@@ -9,10 +9,11 @@ Pod::Spec.new do |spec|
   spec.ios.deployment_target  = "9.0"
   spec.tvos.deployment_target  = '9.0'
   spec.visionos.deployment_target = "1.0"
-  spec.default_subspecs = 'Core'
+  spec.default_subspecs = 'Swift'
   spec.source       = { :git => "https://github.com/bililioo/LookinServer.git", :tag => "1.2.9"}
   spec.framework  = "UIKit"
   spec.requires_arc = true
+  spec.swift_version = '5.0'
     
   spec.subspec 'Core' do |ss|
     ss.source_files = ['Src/Main/**/*', 'Src/Base/**/*']

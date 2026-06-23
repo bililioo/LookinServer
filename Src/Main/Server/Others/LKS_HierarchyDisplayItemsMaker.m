@@ -25,6 +25,10 @@
 @implementation LKS_HierarchyDisplayItemsMaker
 
 + (BOOL)shouldDisablePreviewForView:(UIView *)view {
+    return [self shouldHideByDefaultForView:view];
+}
+
++ (BOOL)shouldHideByDefaultForView:(UIView *)view {
     if (!view) {
         return NO;
     }
@@ -58,6 +62,9 @@
     LookinDisplayItem *item = [LookinDisplayItem new];
     CGRect layerFrame = layer.frame;
     UIView *hostView = layer.lks_hostView;
+    if ([self shouldHideByDefaultForView:hostView]) {
+        hostView.hidden = YES;
+    }
     if (hostView && hostView.superview) {
         layerFrame = [hostView.superview convertRect:layerFrame toView:nil];
     }

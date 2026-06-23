@@ -14,7 +14,7 @@ To use Lookin macOS app, you need to integrate LookinServer (iOS Framework of Lo
 
 ## via CocoaPods:
 ### Swift Project
-`pod 'LookinServer', :subspecs => ['Swift'], :configurations => ['Debug']`
+`pod 'LookinServer', :configurations => ['Debug']`
 ### Objective-C Project
 `pod 'LookinServer', :configurations => ['Debug']`
 ## via Swift Package Manager:
@@ -50,7 +50,7 @@ Lookin 可以查看与修改 iOS App 里的 UI 对象，类似于 Xcode 自带�
 ## 通过 CocoaPods：
 
 ### Swift 项目
-`pod 'LookinServer', :subspecs => ['Swift'], :configurations => ['Debug']`
+`pod 'LookinServer', :configurations => ['Debug']`
 ### Objective-C 项目
 `pod 'LookinServer', :configurations => ['Debug']`
 
