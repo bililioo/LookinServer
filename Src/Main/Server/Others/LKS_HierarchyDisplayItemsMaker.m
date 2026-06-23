@@ -20,8 +20,18 @@
 #import "LKS_CustomDisplayItemsMaker.h"
 #import "LKS_CustomAttrSetterManager.h"
 #import "LKS_MultiplatformAdapter.h"
+#import "NSObject+LookinServer.h"
 
 @implementation LKS_HierarchyDisplayItemsMaker
+
++ (BOOL)shouldDisablePreviewForView:(UIView *)view {
+    if (!view) {
+        return NO;
+    }
+    
+    NSArray<NSString *> *classNames = [view lks_classChainList];
+    return [classNames containsObject:@"_UIFloatingBarContainerView"];
+}
 
 + (NSArray<LookinDisplayItem *> *)itemsWithScreenshots:(BOOL)hasScreenshots attrList:(BOOL)hasAttrList lowImageQuality:(BOOL)lowQuality readCustomInfo:(BOOL)readCustomInfo saveCustomSetter:(BOOL)saveCustomSetter {
     
@@ -83,6 +93,7 @@
         item.viewObject = [LookinObject instanceWithObject:view];
         item.eventHandlers = [LKS_EventHandlerMaker makeForView:view];
         item.backgroundColor = view.backgroundColor;
+        item.noPreview = [self shouldDisablePreviewForView:view];
         
         UIViewController* vc = [view lks_findHostViewController];
         if (vc) {
